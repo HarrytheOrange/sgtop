@@ -6,6 +6,7 @@
 [![PyPI](https://img.shields.io/pypi/v/sgtop)](https://pypi.org/project/sgtop/)
 ![Python](https://img.shields.io/pypi/pyversions/sgtop)
 ![License](https://img.shields.io/badge/license-MIT-blue)
+![Contributors](https://img.shields.io/github/contributors/HarrytheOrange/sgtop)
 
 A [btop](https://github.com/aristocratos/btop)-style terminal dashboard for a live [SGLang](https://github.com/sgl-project/sglang) deployment. Not affiliated with the SGLang project — just a small, read-only sidecar that never touches your inference traffic.
 
