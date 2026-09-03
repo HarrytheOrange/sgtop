@@ -4,7 +4,7 @@ name: Publish to PyPI
 # (OIDC) — no API token stored in this repo. One-time setup on pypi.org:
 # create the "sgtop" project (or claim it as a pending publisher), then under
 # its Publishing settings add a trusted publisher with:
-#   owner: HarrytheOrange   repo: sgtop   workflow: publish.yml   env: pypi
+#   owner: HarrytheOrange   repo: sgtop   workflow: publish.yml   env: sgtop
 on:
   release:
     types: [published]
@@ -12,7 +12,7 @@ on:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-    environment: pypi
+    environment: sgtop
     permissions:
       id-token: write  # required for OIDC trusted publishing
     steps:
