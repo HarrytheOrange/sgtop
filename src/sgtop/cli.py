@@ -10,7 +10,7 @@ from .data import DEFAULT_HOST, DEFAULT_PORT
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="btop-style terminal monitor for a live SGLang deployment. "
-        "Reads a running monitor_dashboard.py's /api/status endpoint — no local "
+        "Reads a running sgtop-server's /api/status endpoint — no local "
         "file access, so it works against any host on the LAN serving one."
     )
     ap.add_argument("--host", default=DEFAULT_HOST, help=f"dashboard host (default: {DEFAULT_HOST})")
