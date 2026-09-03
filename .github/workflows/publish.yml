@@ -1,0 +1,25 @@
+name: Publish to PyPI
+
+# Runs when you publish a GitHub Release. Uses PyPI's "Trusted Publishing"
+# (OIDC) — no API token stored in this repo. One-time setup on pypi.org:
+# create the "sgtop" project (or claim it as a pending publisher), then under
+# its Publishing settings add a trusted publisher with:
+#   owner: HarrytheOrange   repo: sgtop   workflow: publish.yml   env: pypi
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # required for OIDC trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - run: python -m pip install --upgrade build
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1
