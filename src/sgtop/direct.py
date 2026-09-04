@@ -13,9 +13,14 @@ live against sglang 0.5.18:
     all carry a dp_rank label and (like queue_time_seconds) get reported
     identically by both TP ranks in a DP group, so we only trust tp_rank="0".
 
-Two things sgtop-server gives you that this mode can't: the GPU panel (needs
-local nvidia-smi access) and the error-log line (needs the log file). Both
-just render empty here — same as sgtop-server before --enable-metrics.
+The GPU panel is filled in from a *local* nvidia-smi query — i.e. whatever
+GPUs are on the machine running `sgtop` itself, not the (possibly remote)
+--host being watched. That's the right behavior either way: run sgtop right
+on the sglang box and you get real GPU stats for free; run it from a laptop
+watching a remote sglang instance and the panel is correctly empty, since
+nvidia-smi has nothing to report there. The one thing this mode still can't
+give you is the error-log line — that needs sglang's own log file, which
+isn't exposed over the API at all; sgtop-server covers that if you want it.
 """
 from __future__ import annotations
 
@@ -25,6 +30,7 @@ import urllib.request
 from collections import deque
 from typing import Optional
 
+from .localgpu import query_local_gpus
 from .prom import PromTracker
 
 
@@ -33,6 +39,7 @@ class DirectClient:
         self.host = host
         self.port = port
         self.prom = PromTracker()
+        self.gpus: list[dict] = []
         self.caps: dict[str, dict] = {}
         self._running_cap: Optional[int] = None
         self.decode_history: deque = deque(maxlen=1200)
@@ -76,6 +83,7 @@ class DirectClient:
             self.start_ts = now
         self.prom.ingest(metrics_text, now)
         self._ensure_running_cap()
+        self.gpus = query_local_gpus()
 
         by_dp: dict[str, dict] = {}
         for (gauge_key, group_key), value in self.prom.latest_gauge.items():
@@ -180,6 +188,6 @@ class DirectClient:
         return {
             "now": now, "service_up": self.service_up, "pid": None, "uptime": uptime,
             "service_port": self.port, "summary": summary, "active": active,
-            "gpus": [], "caps": dict(self.caps), "prom": prom, "errors": [],
+            "gpus": self.gpus, "caps": dict(self.caps), "prom": prom, "errors": [],
             "history": {"decode": list(self.decode_history), "prefill": [], "gpu": []},
         }

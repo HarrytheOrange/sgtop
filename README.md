@@ -32,9 +32,11 @@ sgtop --host <sglang-host> --port 30000
 
 Leave out `--port` entirely and it'll probe a handful of common ports for you. For the LATENCY panel (TTFT / end-to-end / queue-time / cache-hit-rate), start sglang with `--enable-metrics`; without it you still get concurrency, KV-cache usage, and decode throughput straight off sglang's own API. Prometheus histograms are cumulative counters, so sgtop diffs consecutive scrapes itself to give you an actual rolling 5-minute p50/p90/p99, not a number that just drifts toward whatever your first few requests looked like.
 
+Run `sgtop` right on the sglang box (or `ssh` in and run it there) and the GPU panel fills in for free — it shells out to the *local* `nvidia-smi`, i.e. whatever's on the machine `sgtop` itself is running on. Watching a remote instance from somewhere without GPUs of its own just leaves that panel empty, correctly.
+
 ## The optional sidecar
 
-sglang's API can't tell you GPU temperature or show you a recent-errors line — for that there's `sgtop-server`, a small sidecar you can run on the sglang box that also tails its log and `nvidia-smi`:
+The one thing sglang's own API genuinely can't give you is a recent-errors line — that needs its log file, which isn't exposed over HTTP at all. For that there's `sgtop-server`, a small sidecar you can run on the sglang box that also tails its log:
 
 ```bash
 python -m sglang.launch_server --model-path ... --enable-metrics > server.log 2>&1 &

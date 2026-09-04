@@ -11,7 +11,6 @@ import json
 import os
 import re
 import socket
-import subprocess
 import threading
 import time
 import urllib.request
@@ -21,6 +20,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from statistics import mean, median
 from urllib.parse import urlparse
+
+from .localgpu import query_local_gpus
 
 
 DECODE_RE = re.compile(
@@ -224,24 +225,7 @@ class Monitor:
         except OSError:
             service_up = False
 
-        gpus = []
-        command = [
-            "nvidia-smi",
-            "--query-gpu=index,name,utilization.gpu,utilization.memory,memory.used,memory.total,power.draw,temperature.gpu",
-            "--format=csv,noheader,nounits",
-        ]
-        try:
-            output = subprocess.run(command, capture_output=True, text=True, timeout=2, check=True).stdout
-            for row in output.splitlines():
-                fields = [part.strip() for part in row.split(",")]
-                if len(fields) == 8:
-                    gpus.append({
-                        "index": int(fields[0]), "name": fields[1], "util": float(fields[2]),
-                        "mem_util": float(fields[3]), "mem_used": float(fields[4]),
-                        "mem_total": float(fields[5]), "power": float(fields[6]), "temp": float(fields[7]),
-                    })
-        except (OSError, subprocess.SubprocessError, ValueError):
-            pass
+        gpus = query_local_gpus()
 
         metrics_text = None
         if service_up:
