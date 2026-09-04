@@ -8,11 +8,11 @@
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Contributors](https://img.shields.io/github/contributors/HarrytheOrange/sgtop)
 
-A [btop](https://github.com/aristocratos/btop)-style terminal dashboard for a live [SGLang](https://github.com/sgl-project/sglang) deployment. Not affiliated with the SGLang project — just a small, read-only sidecar that never touches your inference traffic.
+A [btop](https://github.com/aristocratos/btop)-style terminal dashboard for a live [SGLang](https://github.com/sgl-project/sglang) deployment. Not affiliated with the SGLang project — just a small, read-only tool that never touches your inference traffic.
 
 ![sgtop screenshot](docs/screenshot.png)
 
-`nvtop` will tell you a GPU is at 98% utilization. It won't tell you whether your sglang server can actually take more concurrent requests, whether one data-parallel replica is sitting idle while another is drowning, or what your real time-to-first-token looks like. That's what this is for: concurrency vs. the capacity sglang actually computed at startup, KV-cache headroom per replica, and (if you turn on `--enable-metrics`) rolling TTFT/E2E/queue-time percentiles.
+`nvtop` will tell you a GPU is at 98% utilization. It won't tell you whether your sglang server can actually take more concurrent requests, whether one data-parallel replica is sitting idle while another is drowning, or what your real time-to-first-token looks like. That's what this is for: concurrency vs. the capacity sglang actually computed at startup, KV-cache headroom per replica, and (with `--enable-metrics`) rolling TTFT/E2E/queue-time percentiles.
 
 ## Install
 
@@ -24,24 +24,25 @@ Pure standard library, no dependencies, Python ≥ 3.9. `pip install --user sgto
 
 ## Quick start
 
-`sgtop` is just a client — it needs `sgtop-server` running somewhere with access to your sglang process:
+Point it at a running sglang instance — that's it, nothing else to run:
 
 ```bash
-# launch sglang, redirecting its output to a file
-python -m sglang.launch_server --model-path ... --dp-size 2 --enable-metrics > server.log 2>&1 &
-
-# point the sidecar at that log
-sgtop-server --log server.log --service-port 30000 --port 30001 &
-
-# watch it
-sgtop --port 30001
+sgtop --host <sglang-host> --port 30000
 ```
 
-Run `sgtop-server` on the sglang box, then `sgtop --host <that box>` from wherever you actually work. There's also a plain HTML version of the same data at `http://<host>:30001/` if you'd rather glance at it in a browser.
+Leave out `--port` entirely and it'll probe a handful of common ports for you. For the LATENCY panel (TTFT / end-to-end / queue-time / cache-hit-rate), start sglang with `--enable-metrics`; without it you still get concurrency, KV-cache usage, and decode throughput straight off sglang's own API. Prometheus histograms are cumulative counters, so sgtop diffs consecutive scrapes itself to give you an actual rolling 5-minute p50/p90/p99, not a number that just drifts toward whatever your first few requests looked like.
 
-## About `--enable-metrics`
+## The optional sidecar
 
-Skip it and you still get concurrency, KV-cache usage, throughput, and GPU stats — all parsed straight from sglang's log lines. Add it and the LATENCY panel starts showing TTFT / end-to-end / queue-time / cache-hit-rate, pulled from sglang's Prometheus endpoint. Prometheus histograms are cumulative counters, so `sgtop-server` diffs consecutive scrapes itself to give you an actual rolling 5-minute p50/p90/p99 instead of a number that just drifts toward whatever your first few requests looked like.
+sglang's API can't tell you GPU temperature or show you a recent-errors line — for that there's `sgtop-server`, a small sidecar you can run on the sglang box that also tails its log and `nvidia-smi`:
+
+```bash
+python -m sglang.launch_server --model-path ... --enable-metrics > server.log 2>&1 &
+sgtop-server --log server.log --service-port 30000 --port 30001 &
+sgtop --port 30001    # or --mode proxy to skip auto-detection
+```
+
+It also serves a plain HTML version of the same data at `http://<host>:30001/`. Everything else — concurrency, KV-cache, latency — works exactly the same with or without it.
 
 `q` quits. That's the whole interface.
 
