@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 
 from . import theme as th
-from .data import bucket_series, fetch_status
+from .data import bucket_series
 
 SPARK_WIDTH = 40
 WINDOW_S = 300  # matches the dashboard's own history retention
@@ -28,13 +28,13 @@ def fmt_secs(value: float | None) -> str:
 
 
 class App:
-    def __init__(self, stdscr, host: str, port: int, interval: float):
+    def __init__(self, stdscr, client, host: str, port: int, interval: float):
         self.stdscr = stdscr
+        self.client = client
         self.host = host
         self.port = port
         self.interval = interval
         self.theme = th.Theme()
-        self.last_status: dict | None = None
 
     def run(self) -> None:
         curses.curs_set(0)
@@ -45,10 +45,8 @@ class App:
             key = self.stdscr.getch()
             if key in (ord("q"), 27):
                 return
-            status = fetch_status(self.host, self.port)
-            if status is not None:
-                self.last_status = status
-            self.render(self.last_status)
+            self.client.poll()
+            self.render(self.client.snapshot())
 
     # -- rendering -----------------------------------------------------
     def render(self, status: dict | None) -> None:
@@ -102,7 +100,8 @@ class App:
         up = bool(status and status.get("service_up"))
         dot = "●" if up else "○"
         dot_pair = th.PAIR_TITLE_CYAN if up else th.PAIR_BAD
-        state = f"online · pid {status.get('pid')}" if up and status else "offline"
+        pid = status.get("pid") if status else None
+        state = (f"online · pid {pid}" if pid else "online") if up and status else "offline"
         uptime = human_uptime(status.get("uptime")) if status else "—"
         clock = datetime.now().strftime("%H:%M:%S")
 

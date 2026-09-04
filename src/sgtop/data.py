@@ -1,6 +1,13 @@
-"""Networking + time-series helpers. No filesystem access: everything comes
-from a running sgtop-server's /api/status endpoint, so sgtop can point at
-any host on the LAN that's serving one."""
+"""Networking + time-series helpers.
+
+sgtop can talk to two different things on {host}:{port}:
+  - "direct" mode: a plain sglang instance, straight off its own HTTP API
+    (/get_server_info, /metrics — no log file, no sidecar, nothing extra
+    needs to be running). This is the default now.
+  - "proxy" mode: sgtop-server, the optional sidecar that also gives you a
+    GPU panel and the recent-errors line, neither of which sglang's own API
+    exposes.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -10,16 +17,16 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 30001
+DEFAULT_PORT = 30000
 
-# Tried, in order, when the caller didn't pin a --port: sgtop-server's own
-# default (30001) first, then sglang's own port (30000) — people sometimes
-# run sgtop-server bound to that instead, or a deployment script overrides
-# the default — then a couple of other common picks.
-CANDIDATE_PORTS = [30001, 30000, 30002, 30003, 8080]
+# Tried, in order, when the caller didn't pin a --port: sglang's own default
+# port first (direct mode needs nothing else running), then sgtop-server's
+# default, then a couple of other common picks.
+CANDIDATE_PORTS = [30000, 30001, 30002, 30003, 8080]
 
 
 def fetch_status(host: str, port: int, timeout: float = 2.0) -> Optional[dict]:
+    """sgtop-server's /api/status, already in the shape the UI wants."""
     try:
         with urllib.request.urlopen(f"http://{host}:{port}/api/status", timeout=timeout) as r:
             data = json.loads(r.read())
@@ -28,19 +35,34 @@ def fetch_status(host: str, port: int, timeout: float = 2.0) -> Optional[dict]:
     return data if isinstance(data, dict) and "service_up" in data else None
 
 
-def find_dashboard_port(host: str, ports: list[int] = CANDIDATE_PORTS, timeout: float = 1.0) -> Optional[int]:
-    """Probe candidate ports in parallel for a live sgtop-server (something
-    that answers /api/status with the shape we expect, not just anything
-    listening) and return the first hit in `ports` order, or None."""
+def probe_mode(host: str, port: int, timeout: float = 1.0) -> Optional[str]:
+    """Return "proxy" if sgtop-server answers here, "direct" if a plain
+    sglang instance does, else None."""
+    if fetch_status(host, port, timeout) is not None:
+        return "proxy"
+    try:
+        with urllib.request.urlopen(f"http://{host}:{port}/get_server_info", timeout=timeout) as r:
+            data = json.loads(r.read())
+        if isinstance(data, dict) and "max_running_requests" in data:
+            return "direct"
+    except Exception:
+        pass
+    return None
+
+
+def find_dashboard(host: str, ports: list[int] = CANDIDATE_PORTS,
+                    timeout: float = 1.0) -> tuple[Optional[int], Optional[str]]:
+    """Probe candidate ports in parallel; return (port, mode) for the first
+    hit in `ports` order, or (None, None)."""
     with ThreadPoolExecutor(max_workers=len(ports)) as pool:
-        futures = {pool.submit(fetch_status, host, p, timeout): p for p in ports}
-        found: dict[int, bool] = {}
+        futures = {pool.submit(probe_mode, host, p, timeout): p for p in ports}
+        found: dict[int, Optional[str]] = {}
         for fut, port in futures.items():
-            found[port] = fut.result() is not None
+            found[port] = fut.result()
     for p in ports:
         if found.get(p):
-            return p
-    return None
+            return p, found[p]
+    return None, None
 
 
 async def _tcp_open(host: str, port: int, timeout: float) -> bool:
@@ -83,22 +105,41 @@ def full_port_scan(
     concurrency: int = 1000,
     verify_timeout: float = 2.0,
     progress_cb: Optional[Callable[[str], None]] = None,
-) -> Optional[int]:
+) -> tuple[Optional[int], Optional[str]]:
     """Last-resort fallback when none of CANDIDATE_PORTS answer: TCP-connect
-    scan the whole port range for anything listening, then verify each hit
-    with a real /api/status request (a listening port is not necessarily
-    sgtop-server — could be sglang itself, ssh, some unrelated service)."""
+    scan the whole port range for anything listening, then check each hit
+    for either sgtop-server or a plain sglang instance — a listening port
+    isn't necessarily either (could be ssh, some unrelated service)."""
     def _tcp_progress(done: int, total: int) -> None:
         if progress_cb:
             progress_cb(f"scanning ports... {done}/{total}")
 
     open_ports = asyncio.run(_scan_open_ports(host, port_range, tcp_timeout, concurrency, _tcp_progress))
     if progress_cb:
-        progress_cb(f"{len(open_ports)} open TCP port(s) found, checking for sgtop-server...")
+        progress_cb(f"{len(open_ports)} open TCP port(s) found, checking each one...")
     for p in open_ports:
-        if fetch_status(host, p, timeout=verify_timeout) is not None:
-            return p
-    return None
+        mode = probe_mode(host, p, timeout=verify_timeout)
+        if mode:
+            return p, mode
+    return None, None
+
+
+class ProxyClient:
+    """Talks to sgtop-server's /api/status. Same poll()/snapshot() shape as
+    direct.DirectClient so App doesn't care which one it's holding."""
+
+    def __init__(self, host: str, port: int) -> None:
+        self.host = host
+        self.port = port
+        self._last: Optional[dict] = None
+
+    def poll(self) -> None:
+        status = fetch_status(self.host, self.port)
+        if status is not None:
+            self._last = status
+
+    def snapshot(self) -> Optional[dict]:
+        return self._last
 
 
 def bucket_series(
