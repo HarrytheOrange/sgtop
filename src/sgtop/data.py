@@ -3,6 +3,7 @@ from a running sgtop-server's /api/status endpoint, so sgtop can point at
 any host on the LAN that's serving one."""
 from __future__ import annotations
 
+import asyncio
 import json
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -38,6 +39,64 @@ def find_dashboard_port(host: str, ports: list[int] = CANDIDATE_PORTS, timeout: 
             found[port] = fut.result() is not None
     for p in ports:
         if found.get(p):
+            return p
+    return None
+
+
+async def _tcp_open(host: str, port: int, timeout: float) -> bool:
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+    except Exception:
+        return False
+    writer.close()
+    try:
+        await writer.wait_closed()
+    except Exception:
+        pass
+    return True
+
+
+async def _scan_open_ports(host: str, ports: range, timeout: float, concurrency: int,
+                            progress_cb: Optional[Callable[[int, int], None]] = None) -> list[int]:
+    sem = asyncio.Semaphore(concurrency)
+    open_ports: list[int] = []
+    done = 0
+    total = len(ports)
+
+    async def check(p: int) -> None:
+        nonlocal done
+        async with sem:
+            if await _tcp_open(host, p, timeout):
+                open_ports.append(p)
+        done += 1
+        if progress_cb and done % 2000 == 0:
+            progress_cb(done, total)
+
+    await asyncio.gather(*(check(p) for p in ports))
+    return sorted(open_ports)
+
+
+def full_port_scan(
+    host: str,
+    port_range: range = range(1, 65536),
+    tcp_timeout: float = 0.5,
+    concurrency: int = 1000,
+    verify_timeout: float = 2.0,
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> Optional[int]:
+    """Last-resort fallback when none of CANDIDATE_PORTS answer: TCP-connect
+    scan the whole port range for anything listening, then verify each hit
+    with a real /api/status request (a listening port is not necessarily
+    sgtop-server — could be sglang itself, ssh, some unrelated service)."""
+    def _tcp_progress(done: int, total: int) -> None:
+        if progress_cb:
+            progress_cb(f"scanning ports... {done}/{total}")
+
+    open_ports = asyncio.run(_scan_open_ports(host, port_range, tcp_timeout, concurrency, _tcp_progress))
+    if progress_cb:
+        progress_cb(f"{len(open_ports)} open TCP port(s) found, checking for sgtop-server...")
+    for p in open_ports:
+        if fetch_status(host, p, timeout=verify_timeout) is not None:
             return p
     return None
 
