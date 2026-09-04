@@ -4,7 +4,7 @@ import argparse
 import curses
 
 from .app import App
-from .data import DEFAULT_HOST, DEFAULT_PORT
+from .data import DEFAULT_HOST, DEFAULT_PORT, find_dashboard_port
 
 
 def main() -> None:
@@ -14,12 +14,24 @@ def main() -> None:
         "file access, so it works against any host on the LAN serving one."
     )
     ap.add_argument("--host", default=DEFAULT_HOST, help=f"dashboard host (default: {DEFAULT_HOST})")
-    ap.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"dashboard port (default: {DEFAULT_PORT})")
+    ap.add_argument("--port", type=int, default=None,
+                     help=f"dashboard port. If omitted, sgtop probes a few common ports "
+                          f"(default: {DEFAULT_PORT}, then {30000}, ...) and uses whichever answers.")
     ap.add_argument("--interval", type=float, default=1.0, help="refresh interval in seconds (default: 1.0)")
     args = ap.parse_args()
 
+    port = args.port
+    if port is None:
+        print(f"sgtop: no --port given, probing {args.host} for a live dashboard...")
+        port = find_dashboard_port(args.host)
+        if port is not None:
+            print(f"sgtop: found one on port {port}")
+        else:
+            port = DEFAULT_PORT
+            print(f"sgtop: none responded, falling back to default port {port}")
+
     def _run(stdscr):
-        App(stdscr, args.host, args.port, args.interval).run()
+        App(stdscr, args.host, port, args.interval).run()
 
     curses.wrapper(_run)
 
