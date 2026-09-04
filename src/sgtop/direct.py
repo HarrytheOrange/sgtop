@@ -90,9 +90,12 @@ class DirectClient:
             group = dict(group_key)
             if group.get("tp_rank") not in (None, "0"):
                 continue
-            dp_rank = group.get("dp_rank")
-            if dp_rank is None:
-                continue
+            # sglang only adds a dp_rank label at all when dp_size > 1 — a
+            # plain single-instance deployment (no --dp-size, or =1) reports
+            # these gauges with no dp_rank label whatsoever. Treat that as
+            # a single implicit replica "0" instead of silently dropping
+            # every gauge, which used to leave the DP panels empty.
+            dp_rank = group.get("dp_rank", "0")
             by_dp.setdefault(dp_rank, {})[gauge_key] = value
 
         prev_running = {dp: e.get("running", 0) for dp, e in self._last_active().items()}
@@ -143,11 +146,13 @@ class DirectClient:
             group = stats["group"]
             if group.get("tp_rank") not in (None, "0"):
                 continue
-            dp_rank = group.get("dp_rank")
+            # see the matching comment in DirectClient.poll(): no dp_rank
+            # label at all means a single-instance (non-DP) deployment.
+            dp_rank = group.get("dp_rank", "0")
             fields = {k: stats[k] for k in ("mean", "p50", "p90", "p99", "count")}
-            if hist_key == "queue" and dp_rank is not None:
+            if hist_key == "queue":
                 queue_by_dp[str(dp_rank)] = fields
-            elif hist_key != "queue":
+            else:
                 best = latency.get(hist_key)
                 if best is None or stats["count"] > best["count"]:
                     latency[hist_key] = fields
@@ -159,9 +164,7 @@ class DirectClient:
             group = dict(group_key)
             if group.get("tp_rank") not in (None, "0"):
                 continue
-            dp_rank = group.get("dp_rank")
-            if dp_rank is None:
-                continue
+            dp_rank = group.get("dp_rank", "0")
             (cache_hit_by_dp if gauge_key == "cache_hit_rate" else retracted_by_dp)[str(dp_rank)] = value
         return {"latency": latency, "queue_by_dp": queue_by_dp, "cache_hit_by_dp": cache_hit_by_dp,
                 "retracted_by_dp": retracted_by_dp}
