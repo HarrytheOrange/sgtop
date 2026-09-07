@@ -1,13 +1,19 @@
 name: Publish to PyPI
 
-# Runs when you publish a GitHub Release. Uses PyPI's "Trusted Publishing"
-# (OIDC) — no API token stored in this repo. One-time setup on pypi.org:
-# create the "sgtop" project (or claim it as a pending publisher), then under
-# its Publishing settings add a trusted publisher with:
+# Runs on any pushed tag matching v*. Uses PyPI's "Trusted Publishing" (OIDC)
+# — no API token stored in this repo. One-time setup on pypi.org: create the
+# "sgtop" project (or claim it as a pending publisher), then under its
+# Publishing settings add a trusted publisher with:
 #   owner: HarrytheOrange   repo: sgtop   workflow: publish.yml   env: sgtop
+#
+# Deliberately a tag push, not `release: types: [published]` — pushing a tag
+# only needs git push access (already have that over SSH), not a GitHub API
+# token, so this can be triggered without ever handing over write-repo
+# credentials. `git tag vX.Y.Z && git push --tags` is the whole release step.
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   build-and-publish:
