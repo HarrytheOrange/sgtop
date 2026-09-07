@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import curses
+import math
 import time
 from datetime import datetime
 
 from . import theme as th
 from .data import bucket_series
 
-SPARK_WIDTH = 40
 WINDOW_S = 300  # matches the dashboard's own history retention
+DP_PANEL_H = 6
+DP_MIN_W = 45       # narrower than this and labels start getting clipped
+DP_COMPACT_W = 60   # below this, drop to shorter labels instead of overflowing
+DP_MAX_W = 110       # wider than this just wastes space on a single wide terminal
 
 
 def human_uptime(seconds: float | None) -> str:
@@ -25,6 +29,23 @@ def fmt_secs(value: float | None) -> str:
     if value is None:
         return "  n/a"
     return f"{value*1000:4.0f}ms" if value < 1 else f"{value:5.2f}s"
+
+
+def dp_grid_layout(n_dp: int, term_w: int, rows_available: int) -> tuple[int, int, int]:
+    """How many columns/rows to arrange n_dp panels into, and how wide each
+    one gets, given the terminal width and how many rows are left for the
+    grid after everything else on screen. Prefers the fewest columns that
+    still fit vertically, then falls back to as many as the width allows."""
+    if n_dp <= 0:
+        return 1, 0, DP_MAX_W
+    max_rows_that_fit = max(1, rows_available // (DP_PANEL_H + 1))
+    max_cols_by_width = max(1, term_w // (DP_MIN_W + 2))
+    cols = 1
+    while cols < min(n_dp, max_cols_by_width) and math.ceil(n_dp / cols) > max_rows_that_fit:
+        cols += 1
+    rows = math.ceil(n_dp / cols)
+    panel_w = min(DP_MAX_W, max(DP_MIN_W, (term_w - (cols - 1) * 2) // cols))
+    return cols, rows, panel_w
 
 
 class App:
@@ -53,7 +74,7 @@ class App:
         stdscr = self.stdscr
         stdscr.erase()
         h, w = stdscr.getmaxyx()
-        boxw = max(50, min(w - 2, 110))
+        boxw = max(50, min(w - 2, DP_MAX_W))
 
         self._header(0, boxw, status)
 
@@ -67,24 +88,35 @@ class App:
         now = status["now"]
         caps = status.get("caps", {})
         active = status.get("active", {})
+        gpus = status.get("gpus", [])
         hist_decode = status.get("history", {}).get("decode", [])
         hist_gpu = status.get("history", {}).get("gpu", [])
+        dps = sorted(set(active) | set(caps))
 
-        y = 2
-        total_running = total_cap = total_tok = total_tok_cap = 0
-        for i, dp in enumerate(sorted(set(active) | set(caps))):
+        # Reserve room for everything below the grid so we know how many
+        # rows are actually left for DP panels — TOTAL/LATENCY/GPU always
+        # stay full-width, only the DP panels go into a grid.
+        reserved_below = 5 + 6 + (max(1, len(gpus)) + 3) + 1  # total, latency, gpu, footer
+        rows_for_grid = h - 2 - reserved_below  # header takes the first 2 rows
+        cols, rows, panel_w = dp_grid_layout(len(dps), w, rows_for_grid)
+
+        total_running = total_cap = 0
+        grid_top = 2
+        for i, dp in enumerate(dps):
             pair = th.PAIR_TITLE_CYAN if i % 2 == 0 else th.PAIR_TITLE_MAGENTA
-            y = self._dp_panel(y, boxw, dp, pair, active.get(dp, {}), caps.get(dp, {}), hist_decode, now)
+            col, row = i % cols, i // cols
+            x = col * (panel_w + 2)
+            y = grid_top + row * (DP_PANEL_H + 1)
+            self._dp_panel(y, x, panel_w, dp, pair, active.get(dp, {}), caps.get(dp, {}), hist_decode, now)
             cap = caps.get(dp, {})
             a = active.get(dp, {})
             total_running += a.get("running", 0)
             total_cap += cap.get("max_running", 0)
-            total_tok += a.get("tokens", 0)
-            total_tok_cap += cap.get("max_tokens", 0)
 
+        y = grid_top + rows * (DP_PANEL_H + 1) if dps else grid_top
         y = self._total_panel(y, boxw, total_running, total_cap, status["summary"])
         y = self._latency_panel(y, boxw, status.get("prom", {}))
-        y = self._gpu_panel(y, boxw, status.get("gpus", []), hist_gpu, now)
+        y = self._gpu_panel(y, boxw, gpus, hist_gpu, now)
 
         errors = status.get("errors", [])
         if errors:
@@ -114,37 +146,48 @@ class App:
     def _footer(self, y: int, boxw: int) -> None:
         th.safe_addstr(self.stdscr, y, 0, "q quit", curses.A_DIM)
 
-    def _dp_panel(self, y: int, boxw: int, dp: str, title_pair: int, a: dict, cap: dict,
-                  hist_decode: list, now: float) -> int:
+    def _dp_panel(self, y: int, x: int, boxw: int, dp: str, title_pair: int, a: dict, cap: dict,
+                  hist_decode: list, now: float) -> None:
         stdscr = self.stdscr
-        h = 6
-        th.draw_box(stdscr, self.theme, y, 0, h, boxw, dp, title_pair)
+        h = DP_PANEL_H
+        th.draw_box(stdscr, self.theme, y, x, h, boxw, dp, title_pair)
         inner_w = boxw - 4
+        compact = boxw < DP_COMPACT_W
         running, queue, tokens = a.get("running", 0), a.get("queue", 0), a.get("tokens", 0)
         max_running, max_tokens = cap.get("max_running", 0), cap.get("max_tokens", 0)
 
         if max_running:
-            label = f"concurrency {running}/{max_running} ({running/max_running*100:4.1f}%) q={queue}"
+            pct = running / max_running * 100
+            label = f"conc {running}/{max_running} ({pct:3.0f}%)" if compact else \
+                f"concurrency {running}/{max_running} ({pct:4.1f}%) q={queue}"
             bar_w = th.fit_meter_width(inner_w, label)
-            th.draw_meter(stdscr, self.theme, y + 1, 2, bar_w, running / max_running, label)
+            th.draw_meter(stdscr, self.theme, y + 1, x + 2, bar_w, running / max_running, label)
         else:
-            th.safe_addstr(stdscr, y + 1, 2, "concurrency: cap unknown (waiting for startup log line)",
-                            curses.color_pair(th.PAIR_DIM))
+            th.safe_addstr(stdscr, y + 1, x + 2, "cap unknown", curses.color_pair(th.PAIR_DIM))
 
         if max_tokens:
-            label = f"kv-cache {tokens}/{max_tokens} ({tokens/max_tokens*100:4.1f}%)"
+            pct = tokens / max_tokens * 100
+            label = f"kv {tokens}/{max_tokens} ({pct:3.0f}%)" if compact else \
+                f"kv-cache {tokens}/{max_tokens} ({pct:4.1f}%)"
             bar_w = th.fit_meter_width(inner_w, label)
-            th.draw_meter(stdscr, self.theme, y + 2, 2, bar_w, tokens / max_tokens, label)
+            th.draw_meter(stdscr, self.theme, y + 2, x + 2, bar_w, tokens / max_tokens, label)
 
-        thr_series = bucket_series(hist_decode, "ts", lambda it: it["throughput"], now, WINDOW_S,
-                                    SPARK_WIDTH, filter_fn=lambda it: it.get("dp") == dp)
-        th.draw_sparkline(stdscr, y + 3, 2, thr_series, title_pair)
-        th.safe_addstr(stdscr, y + 3, 2 + SPARK_WIDTH + 2,
-                        f"decode {a.get('throughput', 0):7.1f} tok/s (last 5min)")
+        thr_label = f"{a.get('throughput', 0):.0f}tok/s" if compact else \
+            f"decode {a.get('throughput', 0):7.1f} tok/s (last 5min)"
+        spark_w = max(0, inner_w - len(thr_label) - 1)
+        if spark_w >= 4:
+            thr_series = bucket_series(hist_decode, "ts", lambda it: it["throughput"], now, WINDOW_S,
+                                        spark_w, filter_fn=lambda it: it.get("dp") == dp)
+            th.draw_sparkline(stdscr, y + 3, x + 2, thr_series, title_pair)
+            th.safe_addstr(stdscr, y + 3, x + 2 + spark_w + 1, thr_label)
+        else:
+            th.safe_addstr(stdscr, y + 3, x + 2, thr_label)
 
-        th.safe_addstr(stdscr, y + 4, 2,
-                        f"accept_len={a.get('accept_len', 0):.2f}  accept_rate={a.get('accept_rate', 0)*100:5.1f}%")
-        return y + h + 1
+        if compact:
+            th.safe_addstr(stdscr, y + 4, x + 2, f"accept={a.get('accept_rate', 0)*100:3.0f}%")
+        else:
+            th.safe_addstr(stdscr, y + 4, x + 2,
+                            f"accept_len={a.get('accept_len', 0):.2f}  accept_rate={a.get('accept_rate', 0)*100:5.1f}%")
 
     def _total_panel(self, y: int, boxw: int, running: int, cap: int, summary: dict) -> int:
         stdscr = self.stdscr
