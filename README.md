@@ -48,6 +48,18 @@ It also serves a plain HTML version of the same data at `http://<host>:30001/`. 
 
 `q` quits. That's the whole interface.
 
+## Watching a fleet of servers
+
+If you've got several machines on the same LAN each running their own sglang, `--fleet` gives you one screen with a card per server instead of running `sgtop` four times in four terminals:
+
+```bash
+sgtop --fleet 'A=10.0.0.1:30001,B=10.0.0.2:30001,C=10.0.0.3:30001,D=10.0.0.4:30001'
+```
+
+`--fleet` also takes a file path instead of an inline string, one `name=host:port` per line, `#` comments allowed — handy once you've got more than two or three boxes.
+
+Each entry is auto-probed the same way single-host mode is, so a plain sglang instance (direct mode) and a `sgtop-server` sidecar (proxy mode) can be mixed freely in the same fleet. The catch is the same as single-host mode: direct mode only ever shows *local* GPU stats, i.e. whichever machine `sgtop` itself is running on, so a genuinely remote box in direct mode shows `GPU n/a` in its card. To get a real GPU panel and an error count per remote server, run `sgtop-server` there too and point the fleet entry at its port instead of sglang's own — everything else (concurrency, decode throughput, cache-hit) works either way.
+
 ## License
 
 MIT

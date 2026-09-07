@@ -6,6 +6,8 @@ import curses
 from .app import App
 from .data import DEFAULT_HOST, DEFAULT_PORT, ProxyClient, find_dashboard, full_port_scan, probe_mode
 from .direct import DirectClient
+from .fleet import FleetClient, parse_fleet_spec
+from .fleet_app import FleetApp
 
 
 def main() -> None:
@@ -27,7 +29,27 @@ def main() -> None:
     ap.add_argument("--no-full-scan", action="store_true",
                      help="don't fall back to scanning every TCP port (1-65535) when none of the "
                           "common candidate ports answer — just give up and show 'offline' like before")
+    ap.add_argument("--fleet", metavar="SPEC", default=None,
+                     help="Watch several machines at once instead of one. SPEC is either "
+                          "'name=host:port,name=host:port,...' inline, or a path to a text file with "
+                          "one 'name=host:port' per line (# comments ok). Each entry is auto-probed "
+                          "for direct vs proxy mode, same as single-host mode. All other flags except "
+                          "--interval are ignored in this mode.")
     args = ap.parse_args()
+
+    if args.fleet:
+        specs = parse_fleet_spec(args.fleet)
+        if not specs:
+            raise SystemExit("sgtop: --fleet given but no servers parsed from it")
+        client = FleetClient(specs)
+        for m in client.members:
+            print(f"sgtop: {m.name} -> {m.host}:{m.port} probed as {m.mode}")
+
+        def _run_fleet(stdscr):
+            FleetApp(stdscr, client, args.interval).run()
+
+        curses.wrapper(_run_fleet)
+        return
 
     port = args.port
     mode = None if args.mode == "auto" else args.mode
